@@ -4,6 +4,8 @@ using namespace std;
 
 typedef unsigned short U16;
 static char buffer[1024 * 1024 * 20];
+
+static char tmpbuffer[1024 * 1024 * 20];
 static int  n;
 static volatile bool exit_main;
 static volatile bool save_frame;
@@ -54,6 +56,8 @@ void handleFrame(TY_FRAME_DATA* frame, void* userdata ,void* tempdata)
 			imwrite("resized_color.png", resized_color);
 			//save_frame = false;
 		}
+		//lxl add output grayimg
+		pData->render->SetColorType(DepthRender::COLORTYPE_GRAY);
 		cv::Mat depthColor = pData->render->Compute(newDepth);
 		if (save_frame){
 			LOGD(">>>>>>>>>> write depthColor");
@@ -116,12 +120,17 @@ int main(int argc, char* argv[])
 	int m_width = 640;
 	int m_hight = 480;
 	FILE *filetmp;
-	char* tempimg = "./template.yuv";
+	const char* tempimg = "./template.yuv";
 	filetmp = fopen( tempimg, "rb");
+	if (NULL == filetmp)
+	{
+		printf("Error:Open tempimg file fail!\n");
+		return -1;
+	}
 	printf("fopen %s ok\n",tempimg);
-	U16* pfilebuftmp = new U16[m_width*m_hight];//相机采图分辨率
+	//U16* pfilebuftmp = new U16[m_width*m_hight];//相机采图分辨率
 
-	if (m_width*m_hight * 2 != fread(pfilebuftmp, 1, m_width*m_hight * 2, filetmp))
+	if (m_width*m_hight * 2 != fread(tmpbuffer, 1, m_width*m_hight*2, filetmp))
 	{
 		//提示文件读取错误  
 		fclose(filetmp);
@@ -253,7 +262,7 @@ int main(int argc, char* argv[])
 			break;
 		}
 		else {
-			handleFrame(&frame, &cb_data , (void*)pfilebuftmp);
+			handleFrame(&frame, &cb_data , (void*)tmpbuffer);
 		}
 	}
 
