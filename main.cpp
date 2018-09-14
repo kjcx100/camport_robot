@@ -1,6 +1,6 @@
 #include "../common/common.hpp"
 using namespace std;
-
+using namespace cv;
 
 typedef unsigned short U16;
 static char buffer[1024 * 1024 * 20];
@@ -18,6 +18,169 @@ struct CallbackData {
 	TY_CAMERA_DISTORTION color_dist;
 	TY_CAMERA_INTRINSIC color_intri;
 };
+int DeepImgFinds_write_rgb(Mat* depthColor, Mat* resized_color, int blurSize, int morphW, int morphH)
+{
+	int SOBEL_SCALE = 0;
+	int SOBEL_DELTA = 0.5;
+	int SOBEL_DDEPTH = CV_16S;
+	int SOBEL_X_WEIGHT = 1;
+
+	Mat mat_blur;
+	Mat In_rgb = resized_color->clone();
+	mat_blur = depthColor->clone();
+	GaussianBlur(&depthColor, mat_blur, Size(blurSize, blurSize), 0, 0, BORDER_DEFAULT);
+
+	Mat mat_gray;
+	if (mat_blur.channels() == 3)
+		cvtColor(mat_blur, mat_gray, CV_RGB2GRAY);
+	else
+		mat_gray = mat_blur;
+
+	int scale = SOBEL_SCALE;
+	int delta = SOBEL_DELTA;
+	int ddepth = SOBEL_DDEPTH;
+
+	Mat grad_x, grad_y;
+	Mat abs_grad_x, abs_grad_y;
+
+	namedWindow("mat_gray");
+	imshow("mat_gray", mat_gray);
+	cvWaitKey(0);
+	destroyWindow("mat_gray");
+	//Sobel(mat_gray, grad_x, ddepth, 1, 0, 3, scale, delta, BORDER_DEFAULT);
+	//convertScaleAbs(grad_x, abs_grad_x);
+
+
+	//Mat grad;
+	//addWeighted(abs_grad_x, SOBEL_X_WEIGHT, 0, 0, 0, grad);
+
+	Mat mat_threshold;
+	double otsu_thresh_val = threshold(mat_gray, mat_threshold, 30, 255, CV_THRESH_BINARY);
+	//threshold(grad, mat_threshold, 0, 255, CV_THRESH_OTSU + CV_THRESH_BINARY);
+	//############先开操作，去掉一些小的区域####################
+	int Open_morphW = 3;
+	int Open_morphH = 3;
+	Mat element = getStructuringElement(MORPH_RECT, Size(Open_morphW, Open_morphH));
+	morphologyEx(mat_threshold, mat_threshold, MORPH_OPEN, element);
+	char jpgfileopen[1024] = { 0 };
+	char morphopen[1024] = { 0 };
+	//strncpy_s(morphopen, filename + st_len_dirout, strlen(filename) - 4 - st_len_dirout);
+	//sprintf_s(jpgfileopen, "./outdir%s_morphology.jpg", morphopen);
+	//imwrite(jpgfileopen, mat_threshold);
+	if (save_frame){
+		LOGD(">>>>>>>>>> write projected_depth");
+		imwrite("morphology.png", mat_threshold);
+	}
+	//#if 1
+	Mat findContour;
+	mat_threshold.copyTo(findContour);
+	vector<vector<Point>> contours;
+	findContours(findContour,
+		contours,               // a vector of contours
+		CV_RETR_LIST,
+		CV_CHAIN_APPROX_NONE);  // all pixels of each contours
+	vector<vector<Point>>::iterator itc = contours.begin();
+	int Count_contours = 0;
+	vector<Rect> first_rects;
+
+	while (itc != contours.end()) {
+		RotatedRect mr = minAreaRect(Mat(*itc));
+		Rect_<float> safeBoundRect;
+		if (!calcSafeRect(mr, mat_threshold, safeBoundRect))
+		{
+			cout << "calcSafeRect is false" << endl;
+			//continue;
+		}
+		else
+		{
+			if (verifySizes(safeBoundRect)) {
+				first_rects.push_back(safeBoundRect);
+				//cout << "first_rects.size==" << first_rects.size() << endl;
+				cout << "safeBoundRect.area:" << safeBoundRect.area() << endl;
+				cout << "safeBoundRect.x: y: width: height:" << safeBoundRect.x << safeBoundRect.y
+					<< safeBoundRect.width << safeBoundRect.height << endl;
+				/*
+				Mat image_rects = mat_threshold(safeBoundRect);
+				namedWindow("image_rects");
+				imshow("image_rects", image_rects);
+				cvWaitKey(0);
+				destroyWindow("image_rects");
+				char jpgfile_rects[1024] = { 0 };
+				sprintf_s(jpgfile_rects, "%s_image_rects_%d.jpg", filename, first_rects.size());
+				//imwrite(jpgfile_rects, image_rects);
+				*/
+				rectangle(in, safeBoundRect, Scalar(0, 0, 255));
+				rectangle(In_rgb, safeBoundRect, Scalar(0, 255, 255));
+				for (int j = 0; j < contours[Count_contours].size(); j++)
+				{
+					//绘制出contours向量内所有的像素点
+					Point P = Point(contours[Count_contours][j].x, contours[Count_contours][j].y);
+					//输出到rgb
+					//In_rgb.at<uchar>(P) = 0;
+					circle(In_rgb, P, 0, Scalar(255, 255, 0));
+				}
+			}
+			else//不满足条件的，填充黑色
+			{
+				rectangle(in, safeBoundRect, Scalar(0, 255, 0));
+				Mat FillImg = Mat::zeros(safeBoundRect.height, safeBoundRect.width, CV_8UC1);
+				cout << "FillImg.cols:" << FillImg.cols << "  FillImg.rows:" << FillImg.rows << endl;
+				Rect fillRect = safeBoundRect;
+				Mat imageROI = mat_threshold(fillRect);
+				floodFill(imageROI, Point2f(imageROI.cols >> 1, imageROI.rows >> 1), 0);
+				FillImg.copyTo(imageROI);
+				//contours[i]代表的是第i个轮廓，contours[i].size()代表的是第i个轮廓上所有的像素点数
+				for (int j = 0; j < contours[Count_contours].size(); j++)
+				{
+					//绘制出contours向量内所有的像素点
+					Point P = Point(contours[Count_contours][j].x, contours[Count_contours][j].y);
+					mat_threshold.at<uchar>(P) = 0;
+				}
+				{
+					//Mat FillImg = Mat::zeros(safeBoundRect.height, safeBoundRect.width, CV_8UC1);
+					//cout << "FillImg.cols:" << FillImg.cols << "  FillImg.rows:" << FillImg.rows << endl;
+					////cout << "safeBoundRect.angle:" << safeBoundRect.angle << endl;
+					//Rect fillRect = safeBoundRect;
+					//Mat imageROI = mat_threshold(fillRect);
+					//FillImg.copyTo(imageROI);
+				}
+			}
+		}
+		++itc;
+		++Count_contours;
+	}
+	out = mat_threshold;
+	namedWindow("in_add_rect");
+	imshow("in_add_rect", in);
+	cvWaitKey(0);
+	destroyWindow("in_add_rect");
+	char jpgin_add_rect[1024] = { 0 };
+	char name[1024] = { 0 };
+	strncpy_s(name, filename + st_len_dirout, strlen(filename) - 4 - st_len_dirout);
+	sprintf_s(jpgin_add_rect, "./outdir%s_in_add_rect.jpg", name);
+	imwrite(jpgin_add_rect, in);
+	//#endif
+	////////////////////找连通区域在膨胀腐蚀之前//////////////////////
+	element = getStructuringElement(MORPH_RECT, Size(morphW, morphH));
+	morphologyEx(mat_threshold, mat_threshold, MORPH_CLOSE, element);
+
+	namedWindow("morphologyEx");
+	imshow("morphologyEx", mat_threshold);
+	cvWaitKey(0);
+	destroyWindow("morphologyEx");
+	//char jpgfile[1024] = { 0 };
+	//char morphname[1024] = { 0 };
+	//strncpy_s(morphname, filename + st_len_dirout, strlen(filename) - 4 - st_len_dirout);
+	//sprintf_s(jpgfile, "./outdir%s_morphology.jpg", morphname);
+	//imwrite(jpgfile, mat_threshold);
+	//############写到rgb文件中##############
+	char rgbjpgfile[1024] = { 0 };
+	char write_rgbname[1024] = { 0 };
+	strncpy_s(write_rgbname, filename + st_len_dirout, strlen(filename) - 4 - st_len_dirout);
+	sprintf_s(rgbjpgfile, "./outdir%s__rgb_rect.jpg", write_rgbname);
+	imwrite(rgbjpgfile, In_rgb);
+	return 0;
+}
 
 void handleFrame(TY_FRAME_DATA* frame, void* userdata ,void* tempdata)
 {
