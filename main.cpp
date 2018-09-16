@@ -18,7 +18,53 @@ struct CallbackData {
 	TY_CAMERA_DISTORTION color_dist;
 	TY_CAMERA_INTRINSIC color_intri;
 };
-int DeepImgFinds_write_rgb(Mat* depthColor, Mat* resized_color, int blurSize, int morphW, int morphH)
+bool verifySizes(Rect mr) {
+	// Set a min and max area. All other patchs are discarded
+	// int min= 1*aspect*1; // minimum area
+	// int max= 2000*aspect*2000; // maximum area
+	int min = 400 * 2;  // minimum area
+	int max = 568 * 340;  // maximum area
+
+	float area = mr.height * mr.width;
+	// cout << "area:" << area << endl;
+	//|| mr.y > (mr.height - (mr.height >> 3))
+	if (area < min || area > max || (mr.y > 413))	//åæ ‡åœ¨ä¸‹è¾¹8åˆ†ä¹‹1
+		return false;
+	else
+	{
+		//cout << "mr.y:" << mr.y << "(472*7/8):" << (472*7/8) << endl;
+		return true;
+	}
+}
+//  calc safe Rect
+//  if not exit, return false
+
+bool calcSafeRect(const RotatedRect &roi_rect, const Mat &src,
+	Rect_<float> &safeBoundRect) {
+	Rect_<float> boudRect = roi_rect.boundingRect();
+
+	float tl_x = boudRect.x > 0 ? boudRect.x : 0;
+	float tl_y = boudRect.y > 0 ? boudRect.y : 0;
+
+	float br_x = boudRect.x + boudRect.width < src.cols
+		? boudRect.x + boudRect.width - 1
+		: src.cols - 1;
+	float br_y = boudRect.y + boudRect.height < src.rows
+		? boudRect.y + boudRect.height - 1
+		: src.rows - 1;
+
+	float roi_width = br_x - tl_x;
+	float roi_height = br_y - tl_y;
+
+	if (roi_width <= 0 || roi_height <= 0) return false;
+
+	//  a new rect not out the range of mat
+
+	safeBoundRect = Rect_<float>(tl_x, tl_y, roi_width, roi_height);
+
+	return true;
+}
+int DeepImgFinds_write_rgb(Mat depthColor, Mat resized_color, int blurSize, int morphW, int morphH)
 {
 	int SOBEL_SCALE = 0;
 	int SOBEL_DELTA = 0.5;
@@ -26,16 +72,47 @@ int DeepImgFinds_write_rgb(Mat* depthColor, Mat* resized_color, int blurSize, in
 	int SOBEL_X_WEIGHT = 1;
 
 	Mat mat_blur;
-	Mat In_rgb = resized_color->clone();
-	mat_blur = depthColor->clone();
-	GaussianBlur(&depthColor, mat_blur, Size(blurSize, blurSize), 0, 0, BORDER_DEFAULT);
+	Mat In_rgb = resized_color.clone();
+	mat_blur = depthColor.clone();
+	GaussianBlur(depthColor, mat_blur, Size(blurSize, blurSize), 0, 0, BORDER_DEFAULT);
 
 	Mat mat_gray;
 	if (mat_blur.channels() == 3)
 		cvtColor(mat_blur, mat_gray, CV_RGB2GRAY);
 	else
 		mat_gray = mat_blur;
-
+	//è¾“å…¥depthå›¾åƒå…ˆåˆ‡æ‰ä¸¤å— ä¸Šè¾¹ï¼Œå·¦è¾¹
+	#if 0
+	Mat FillImg_top = Mat::zeros(depthColor.rows,40, CV_8UC1);
+	Mat FillImg_left = Mat::zeros(112,depthColor.cols - 40, CV_8UC1);
+	//Rect blur_fillRect_top = Rect(0,0,depthColor.rows,40);	
+	//Rect blur_fillRect_left = Rect(0,40,112,depthColor.cols - 40);
+	Rect safe_fillRect_top = Rect(0,0,depthColor.rows-2,40);
+	Rect safe_fillRect_left = Rect(0,42,112,depthColor.cols -44);
+	cout << "mat_gray.rows:" << mat_gray.rows <<" mat_gray.cols:" << mat_gray.cols << endl;
+	cout << "safe_fillRect_top.x:" << safe_fillRect_top.x << " .y:"<< safe_fillRect_top.y << " .w:"<< safe_fillRect_top.width << " .h:"<< safe_fillRect_top.height << endl;
+	cout << "safe_fillRect_left.x:" << safe_fillRect_left.x << " .y:"<< safe_fillRect_left.y << " .w:"<< safe_fillRect_left.width << " .h:"<< safe_fillRect_left.height << endl;
+	Mat imageROI_top = mat_gray(safe_fillRect_top);
+	Mat imageROI_left = mat_gray(safe_fillRect_left);
+	//floodFill(imageROI_top, Point2f(imageROI_top.cols >> 1, imageROI_top.rows >> 1), 0);
+	cout << "FillImg_top.rows: " << FillImg_top.rows << " FillImg_top.cols:" << FillImg_top.cols << endl;
+	cout << "imageROI_top.rows: " << imageROI_top.rows << " imageROI_top.cols:" << imageROI_top.cols << endl;
+	FillImg_top.copyTo(imageROI_top);
+	FillImg_left.copyTo(imageROI_left);
+	#endif
+	for (int i = 0; i <  mat_gray.rows; i++)
+	{
+		for (int j = 0; j <  mat_gray.cols; j++)
+		{
+			//ç»˜åˆ¶å‡ºcontourså‘é‡å†…æ‰€æœ‰çš„åƒç´ ç‚¹
+			Point P = Point(j, i);
+			//è¾“å‡ºåˆ°rgb
+			if(i <= 40)
+				circle(mat_gray, P, 0, Scalar(255, 255, 0));
+			if( i > 40 && j <= 112)
+				circle(mat_gray, P, 0, Scalar(255, 255, 0));
+		}
+	}
 	int scale = SOBEL_SCALE;
 	int delta = SOBEL_DELTA;
 	int ddepth = SOBEL_DDEPTH;
@@ -43,10 +120,10 @@ int DeepImgFinds_write_rgb(Mat* depthColor, Mat* resized_color, int blurSize, in
 	Mat grad_x, grad_y;
 	Mat abs_grad_x, abs_grad_y;
 
-	namedWindow("mat_gray");
-	imshow("mat_gray", mat_gray);
-	cvWaitKey(0);
-	destroyWindow("mat_gray");
+	//namedWindow("mat_gray");
+	//imshow("mat_gray", mat_gray);
+	//cvWaitKey(0);
+	//destroyWindow("mat_gray");
 	//Sobel(mat_gray, grad_x, ddepth, 1, 0, 3, scale, delta, BORDER_DEFAULT);
 	//convertScaleAbs(grad_x, abs_grad_x);
 
@@ -55,9 +132,9 @@ int DeepImgFinds_write_rgb(Mat* depthColor, Mat* resized_color, int blurSize, in
 	//addWeighted(abs_grad_x, SOBEL_X_WEIGHT, 0, 0, 0, grad);
 
 	Mat mat_threshold;
-	double otsu_thresh_val = threshold(mat_gray, mat_threshold, 30, 255, CV_THRESH_BINARY);
+	double otsu_thresh_val = threshold(mat_gray, mat_threshold, 30, 255, CV_THRESH_BINARY_INV);
 	//threshold(grad, mat_threshold, 0, 255, CV_THRESH_OTSU + CV_THRESH_BINARY);
-	//############ÏÈ¿ª²Ù×÷£¬È¥µôÒ»Ğ©Ğ¡µÄÇøÓò####################
+	//############å…ˆå¼€æ“ä½œï¼Œå»æ‰ä¸€äº›å°çš„åŒºåŸŸ####################
 	int Open_morphW = 3;
 	int Open_morphH = 3;
 	Mat element = getStructuringElement(MORPH_RECT, Size(Open_morphW, Open_morphH));
@@ -68,21 +145,21 @@ int DeepImgFinds_write_rgb(Mat* depthColor, Mat* resized_color, int blurSize, in
 	//sprintf_s(jpgfileopen, "./outdir%s_morphology.jpg", morphopen);
 	//imwrite(jpgfileopen, mat_threshold);
 	if (save_frame){
-		LOGD(">>>>>>>>>> write projected_depth");
-		imwrite("morphology.png", mat_threshold);
+		LOGD(">>>>>>>>>> write jpgfileopen");
+		imwrite("jpgfileopen.png", mat_threshold);
 	}
 	//#if 1
 	Mat findContour;
 	mat_threshold.copyTo(findContour);
-	vector<vector<Point>> contours;
+	vector<vector<Point> > contours;
 	findContours(findContour,
 		contours,               // a vector of contours
 		CV_RETR_LIST,
 		CV_CHAIN_APPROX_NONE);  // all pixels of each contours
-	vector<vector<Point>>::iterator itc = contours.begin();
+	vector<vector<Point> >::iterator itc = contours.begin();
 	int Count_contours = 0;
 	vector<Rect> first_rects;
-
+ 
 	while (itc != contours.end()) {
 		RotatedRect mr = minAreaRect(Mat(*itc));
 		Rect_<float> safeBoundRect;
@@ -109,30 +186,30 @@ int DeepImgFinds_write_rgb(Mat* depthColor, Mat* resized_color, int blurSize, in
 				sprintf_s(jpgfile_rects, "%s_image_rects_%d.jpg", filename, first_rects.size());
 				//imwrite(jpgfile_rects, image_rects);
 				*/
-				rectangle(in, safeBoundRect, Scalar(0, 0, 255));
+				rectangle(depthColor, safeBoundRect, Scalar(0, 0, 255));
 				rectangle(In_rgb, safeBoundRect, Scalar(0, 255, 255));
 				for (int j = 0; j < contours[Count_contours].size(); j++)
 				{
-					//»æÖÆ³öcontoursÏòÁ¿ÄÚËùÓĞµÄÏñËØµã
+					//ç»˜åˆ¶å‡ºcontourså‘é‡å†…æ‰€æœ‰çš„åƒç´ ç‚¹
 					Point P = Point(contours[Count_contours][j].x, contours[Count_contours][j].y);
-					//Êä³öµ½rgb
+					//è¾“å‡ºåˆ°rgb
 					//In_rgb.at<uchar>(P) = 0;
 					circle(In_rgb, P, 0, Scalar(255, 255, 0));
 				}
 			}
-			else//²»Âú×ãÌõ¼şµÄ£¬Ìî³äºÚÉ«
+			else//ä¸æ»¡è¶³æ¡ä»¶çš„ï¼Œå¡«å……é»‘è‰²
 			{
-				rectangle(in, safeBoundRect, Scalar(0, 255, 0));
+				rectangle(depthColor, safeBoundRect, Scalar(0, 255, 0));
 				Mat FillImg = Mat::zeros(safeBoundRect.height, safeBoundRect.width, CV_8UC1);
 				cout << "FillImg.cols:" << FillImg.cols << "  FillImg.rows:" << FillImg.rows << endl;
 				Rect fillRect = safeBoundRect;
 				Mat imageROI = mat_threshold(fillRect);
 				floodFill(imageROI, Point2f(imageROI.cols >> 1, imageROI.rows >> 1), 0);
 				FillImg.copyTo(imageROI);
-				//contours[i]´ú±íµÄÊÇµÚi¸öÂÖÀª£¬contours[i].size()´ú±íµÄÊÇµÚi¸öÂÖÀªÉÏËùÓĞµÄÏñËØµãÊı
+				//contours[i]ä»£è¡¨çš„æ˜¯ç¬¬iä¸ªè½®å»“ï¼Œcontours[i].size()ä»£è¡¨çš„æ˜¯ç¬¬iä¸ªè½®å»“ä¸Šæ‰€æœ‰çš„åƒç´ ç‚¹æ•°
 				for (int j = 0; j < contours[Count_contours].size(); j++)
 				{
-					//»æÖÆ³öcontoursÏòÁ¿ÄÚËùÓĞµÄÏñËØµã
+					//ç»˜åˆ¶å‡ºcontourså‘é‡å†…æ‰€æœ‰çš„åƒç´ ç‚¹
 					Point P = Point(contours[Count_contours][j].x, contours[Count_contours][j].y);
 					mat_threshold.at<uchar>(P) = 0;
 				}
@@ -149,36 +226,44 @@ int DeepImgFinds_write_rgb(Mat* depthColor, Mat* resized_color, int blurSize, in
 		++itc;
 		++Count_contours;
 	}
-	out = mat_threshold;
-	namedWindow("in_add_rect");
-	imshow("in_add_rect", in);
-	cvWaitKey(0);
-	destroyWindow("in_add_rect");
+	//out = mat_threshold;
+	//namedWindow("in_add_rect");
+	imshow("in_add_rect", depthColor);
+	//cvWaitKey(0);
+	//destroyWindow("in_add_rect");
 	char jpgin_add_rect[1024] = { 0 };
 	char name[1024] = { 0 };
-	strncpy_s(name, filename + st_len_dirout, strlen(filename) - 4 - st_len_dirout);
-	sprintf_s(jpgin_add_rect, "./outdir%s_in_add_rect.jpg", name);
-	imwrite(jpgin_add_rect, in);
+	//strncpy_s(name, filename + st_len_dirout, strlen(filename) - 4 - st_len_dirout);
+	//sprintf_s(jpgin_add_rect, "./outdir%s_in_add_rect.jpg", name);
+	//imwrite(jpgin_add_rect, in);
+	if (save_frame) {
+		LOGD(">>>>>>>>>> write jpgin_add_rect");
+		imwrite("jpgin_add_rect.png", depthColor);
+	}
 	//#endif
-	////////////////////ÕÒÁ¬Í¨ÇøÓòÔÚÅòÕÍ¸¯Ê´Ö®Ç°//////////////////////
+	////////////////////æ‰¾è¿é€šåŒºåŸŸåœ¨è†¨èƒ€è…èš€ä¹‹å‰//////////////////////
 	element = getStructuringElement(MORPH_RECT, Size(morphW, morphH));
 	morphologyEx(mat_threshold, mat_threshold, MORPH_CLOSE, element);
 
-	namedWindow("morphologyEx");
+	//namedWindow("morphologyEx");
 	imshow("morphologyEx", mat_threshold);
-	cvWaitKey(0);
-	destroyWindow("morphologyEx");
+	//cvWaitKey(0);
+	//destroyWindow("morphologyEx");
 	//char jpgfile[1024] = { 0 };
 	//char morphname[1024] = { 0 };
 	//strncpy_s(morphname, filename + st_len_dirout, strlen(filename) - 4 - st_len_dirout);
 	//sprintf_s(jpgfile, "./outdir%s_morphology.jpg", morphname);
 	//imwrite(jpgfile, mat_threshold);
-	//############Ğ´µ½rgbÎÄ¼şÖĞ##############
+	//############å†™åˆ°rgbæ–‡ä»¶ä¸­##############
 	char rgbjpgfile[1024] = { 0 };
 	char write_rgbname[1024] = { 0 };
-	strncpy_s(write_rgbname, filename + st_len_dirout, strlen(filename) - 4 - st_len_dirout);
-	sprintf_s(rgbjpgfile, "./outdir%s__rgb_rect.jpg", write_rgbname);
-	imwrite(rgbjpgfile, In_rgb);
+	//strncpy_s(write_rgbname, filename + st_len_dirout, strlen(filename) - 4 - st_len_dirout);
+	//sprintf_s(rgbjpgfile, "./outdir%s__rgb_rect.jpg", write_rgbname);
+	//imwrite(rgbjpgfile, In_rgb);
+	if (save_frame) {
+		LOGD(">>>>>>>>>> write resized_color add rect");
+		imwrite("rect_resized_color.png", In_rgb);
+	}
 	return 0;
 }
 
@@ -235,6 +320,7 @@ void handleFrame(TY_FRAME_DATA* frame, void* userdata ,void* tempdata)
 			imwrite("projected_depth.png", depthColor);
 			//save_frame = false;
 		}
+		DeepImgFinds_write_rgb(depthColor,resized_color, 3, 7, 7);
 	}
 	if (save_frame){
 		LOGD(">>>>>>>>>> write images");
@@ -242,7 +328,7 @@ void handleFrame(TY_FRAME_DATA* frame, void* userdata ,void* tempdata)
 		imwrite("color.png", color);
 		save_frame = false;
 	}
-	cv::namedWindow("key");
+	//cv::namedWindow("key");
 	int key = cv::waitKey(1);
 	//LOGD(">>>>>>>>>>key==%d\n", key);
 	switch (key){
@@ -291,11 +377,11 @@ int main(int argc, char* argv[])
 		return -1;
 	}
 	printf("fopen %s ok\n",tempimg);
-	//U16* pfilebuftmp = new U16[m_width*m_hight];//Ïà»ú²ÉÍ¼·Ö±æÂÊ
+	//U16* pfilebuftmp = new U16[m_width*m_hight];//ç›¸æœºé‡‡å›¾åˆ†è¾¨ç‡
 
 	if (m_width*m_hight * 2 != fread(tmpbuffer, 1, m_width*m_hight*2, filetmp))
 	{
-		//ÌáÊ¾ÎÄ¼ş¶ÁÈ¡´íÎó  
+		//æç¤ºæ–‡ä»¶è¯»å–é”™è¯¯  
 		fclose(filetmp);
 		cout << "fread_s filetmp ERR!!!" << endl;
 		return -1;
