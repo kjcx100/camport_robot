@@ -1,4 +1,4 @@
-#include "../common/common.hpp"
+﻿#include "../common/common.hpp"
 using namespace std;
 using namespace cv;
 
@@ -9,6 +9,8 @@ static char tmpbuffer[1024 * 1024 * 20];
 static int  n;
 static volatile bool exit_main;
 static volatile bool save_frame;
+static volatile bool save_rect_color;
+static int gsave_rect_count = 0;
 
 struct CallbackData {
 	int             index;
@@ -64,6 +66,61 @@ bool calcSafeRect(const RotatedRect &roi_rect, const Mat &src,
 
 	return true;
 }
+
+void depthTransfer(cv::Mat depth, uint16_t* t_data, cv::Mat* newDepth, cv::Mat* blackDepth)
+{
+	int i=0;
+	uint16_t dst_data[480*640];
+	uint16_t blk_data[480*640];
+	uint16_t* src_data;
+	uint16_t treshhold;
+	
+	src_data = (uint16_t *)depth.data;
+	memset(blk_data,0,480*640*2);
+	for(i=0;i<(480*640);i++)
+	{
+		treshhold = (uint16_t)(t_data[i]*0.03);
+		if(src_data[i] == 0)
+		{
+			dst_data[i] = 0;
+			if(i > (100*640))
+			{
+				blk_data[i] = 500;
+			}
+		}
+		else if((src_data[i] - t_data[i]) < (-1 * treshhold))
+		{
+			dst_data[i] = 0;
+			//dst_data[i] = 1200;
+		}
+		else if((src_data[i] - t_data[i]) > (treshhold * 1.5))
+		{
+			dst_data[i] = 2500;
+		}
+		else
+		{
+			dst_data[i] = 0;
+		}
+		/*
+		if(i == (240*640 + 320))
+		{
+			LOGD("--------------------- treshhold:%d, src_data[i]-t_data[i]:%d", treshhold, (src_data[i] - t_data[i]));
+			LOGD("---------------------------------------------- dst_data[]:%d", dst_data[i]);
+		}
+		*/
+		//dst_data[i] = src_data[i] - t_data[i];
+	}
+	
+	dst_data[0] = 500;
+	dst_data[1] = 4000;
+	
+	blk_data[0] = 500;
+	blk_data[1] = 4000;
+	
+	*newDepth = cv::Mat(480, 640, CV_16U, dst_data);
+	*blackDepth = cv::Mat(480, 640, CV_16U, blk_data);
+}
+
 int DeepImgFinds_write_rgb(Mat depthColor, Mat resized_color, int blurSize, int morphW, int morphH)
 {
 	int SOBEL_SCALE = 0;
@@ -99,7 +156,6 @@ int DeepImgFinds_write_rgb(Mat depthColor, Mat resized_color, int blurSize, int 
 	cout << "imageROI_top.rows: " << imageROI_top.rows << " imageROI_top.cols:" << imageROI_top.cols << endl;
 	FillImg_top.copyTo(imageROI_top);
 	FillImg_left.copyTo(imageROI_left);
-	#endif
 	for (int i = 0; i <  mat_gray.rows; i++)
 	{
 		for (int j = 0; j <  mat_gray.cols; j++)
@@ -111,6 +167,19 @@ int DeepImgFinds_write_rgb(Mat depthColor, Mat resized_color, int blurSize, int 
 				circle(mat_gray, P, 0, Scalar(255, 255, 0));
 			if( i > 40 && j <= 112)
 				circle(mat_gray, P, 0, Scalar(255, 255, 0));
+		}
+	}
+	#endif
+	for (int i = 0; i <  mat_gray.rows; i++)
+	{
+		uchar* data_gray = mat_gray.ptr<uchar>(i);
+		for (int j = 0; j <  mat_gray.cols; j++)
+		{
+			//输出到rgb
+			if(i <= 40)
+				data_gray[j] = 255;
+			if( i > 40 && j <= 112)
+				data_gray[j] = 255;
 		}
 	}
 	int scale = SOBEL_SCALE;
@@ -146,7 +215,7 @@ int DeepImgFinds_write_rgb(Mat depthColor, Mat resized_color, int blurSize, int 
 	//imwrite(jpgfileopen, mat_threshold);
 	if (save_frame){
 		LOGD(">>>>>>>>>> write jpgfileopen");
-		imwrite("jpgfileopen.png", mat_threshold);
+		imwrite("jpgfile_open.png", mat_threshold);
 	}
 	//#if 1
 	Mat findContour;
@@ -174,8 +243,8 @@ int DeepImgFinds_write_rgb(Mat depthColor, Mat resized_color, int blurSize, int 
 				first_rects.push_back(safeBoundRect);
 				//cout << "first_rects.size==" << first_rects.size() << endl;
 				cout << "safeBoundRect.area:" << safeBoundRect.area() << endl;
-				cout << "safeBoundRect.x: y: width: height:" << safeBoundRect.x << safeBoundRect.y
-					<< safeBoundRect.width << safeBoundRect.height << endl;
+				cout << "safeBoundRect.x:"<< safeBoundRect.x<<"  y:"<< safeBoundRect.y<<"  width:"<< safeBoundRect.width <<"  height:"  
+					 << safeBoundRect.height << endl;
 				/*
 				Mat image_rects = mat_threshold(safeBoundRect);
 				namedWindow("image_rects");
@@ -187,7 +256,55 @@ int DeepImgFinds_write_rgb(Mat depthColor, Mat resized_color, int blurSize, int 
 				//imwrite(jpgfile_rects, image_rects);
 				*/
 				rectangle(depthColor, safeBoundRect, Scalar(0, 0, 255));
-				rectangle(In_rgb, safeBoundRect, Scalar(0, 255, 255));
+				//rectangle(In_rgb, safeBoundRect, Scalar(0, 255, 255));
+				double safecontourArea = contourArea(Mat(*itc));
+				//取出检测到的区域 and canny
+				Mat imageIn_rects = In_rgb(safeBoundRect);
+				Mat imageIn_gray,imageIn_edge;
+				cvtColor(imageIn_rects, imageIn_gray, CV_RGB2GRAY);
+				cv::blur(imageIn_gray, imageIn_edge, cv::Size(7, 7));
+				Canny(imageIn_edge, imageIn_edge, 10, 60, 3);
+				char szimageIn_edge[1024] = {0};
+				sprintf(szimageIn_edge, "imageIn_edge%d.jpg", Count_contours);
+				if (save_frame) {
+					LOGD(">>>>>>>>>> write imageIn_edge");
+					imwrite(szimageIn_edge, imageIn_edge);
+				}
+				Mat rectsContour;
+				imageIn_edge.copyTo(rectsContour);
+				vector<vector<Point> > rectscontours;
+				findContours(rectsContour,
+					rectscontours,               // a vector of contours
+					CV_RETR_EXTERNAL,
+					CV_CHAIN_APPROX_NONE);  // all pixels of each contours
+				//imageIn_edge.copyTo(imageIn_rects);
+				std::cout <<"rectscontours.size:" << rectscontours.size()<< endl;
+				for (int i = 0; i < rectscontours.size(); i++)
+				{
+					double rectscontourArea = contourArea(Mat(rectscontours[i]));
+					std::cout <<"rectscontourArea:" << rectscontourArea <<"  safecontourArea:" << safecontourArea<< endl;
+					if(abs(rectscontourArea - safecontourArea) < safecontourArea*0.05)
+					{
+						for (int j = 0; j < rectscontours[i].size(); j++)
+						{
+							//绘制出contours向量内所有的像素点
+							Point P = Point(rectscontours[i][j].x, rectscontours[i][j].y);
+							//输出到rgb
+							//In_rgb.at<uchar>(P) = 0;
+							circle(imageIn_rects, P, 0, Scalar(255, 255, 0));
+						}
+					}
+				}
+				//namedWindow("imageIn_rects");
+				//imshow("imageIn_rects", imageIn_rects);
+				//cvWaitKey(0);
+				//destroyWindow("imageIn_rects");
+				char szimageIn_rects[1024] = {0};
+				sprintf(szimageIn_rects, "imageIn_rects%d.jpg", Count_contours);
+				if (save_frame) {
+					LOGD(">>>>>>>>>> write imageIn_rects");
+					imwrite(szimageIn_rects, imageIn_rects);
+				}
 				for (int j = 0; j < contours[Count_contours].size(); j++)
 				{
 					//绘制出contours向量内所有的像素点
@@ -240,13 +357,23 @@ int DeepImgFinds_write_rgb(Mat depthColor, Mat resized_color, int blurSize, int 
 		LOGD(">>>>>>>>>> write jpgin_add_rect");
 		imwrite("jpgin_add_rect.png", depthColor);
 	}
+	char szsave_jpgin_add[1024] = {0};
+	sprintf(szsave_jpgin_add, "jpgin_add_rect%d.jpg", gsave_rect_count);
+	if (save_rect_color) {
+		LOGD(">>>>>>>>>> write jpgin_add_rect");
+		imwrite(szsave_jpgin_add, depthColor);
+	}
 	//#endif
 	////////////////////找连通区域在膨胀腐蚀之前//////////////////////
 	element = getStructuringElement(MORPH_RECT, Size(morphW, morphH));
 	morphologyEx(mat_threshold, mat_threshold, MORPH_CLOSE, element);
 
 	//namedWindow("morphologyEx");
-	imshow("morphologyEx", mat_threshold);
+	imshow("morphologyClose", mat_threshold);
+	if (save_frame) {
+		LOGD(">>>>>>>>>> write morphologyClose");
+		imwrite("morphologyClose.png", mat_threshold);
+	}
 	//cvWaitKey(0);
 	//destroyWindow("morphologyEx");
 	//char jpgfile[1024] = { 0 };
@@ -260,11 +387,41 @@ int DeepImgFinds_write_rgb(Mat depthColor, Mat resized_color, int blurSize, int 
 	//strncpy_s(write_rgbname, filename + st_len_dirout, strlen(filename) - 4 - st_len_dirout);
 	//sprintf_s(rgbjpgfile, "./outdir%s__rgb_rect.jpg", write_rgbname);
 	//imwrite(rgbjpgfile, In_rgb);
+	cv::imshow("rect_resized_color", In_rgb);
 	if (save_frame) {
 		LOGD(">>>>>>>>>> write resized_color add rect");
 		imwrite("rect_resized_color.png", In_rgb);
 	}
+	char szsave_rect_color[1024] = {0};
+	sprintf(szsave_rect_color, "rect_resized_color%d.jpg", gsave_rect_count);
+	if (save_rect_color) {
+		LOGD(">>>>>>>>>> write resized_color add rect");
+		imwrite(szsave_rect_color, In_rgb);
+	}
 	return 0;
+}
+
+cv::Mat cvMatRect2Tetra(cv::Mat mtxSrc, int iDstX1, int iDstY1, int iDstX2, int iDstY2,
+						int iDstX3, int iDstY3, int iDstX4, int iDstY4, int iDstWidth, int iDstHeight)
+{
+	cv::Mat mtxDst;
+	std::vector<cv::Point2f> src_corners(4);
+	std::vector<cv::Point2f> dst_corners(4);
+ 
+	src_corners[0]= cv::Point2f(0,0);
+	src_corners[1]= cv::Point2f(mtxSrc.cols - 1,0);
+	src_corners[2]= cv::Point2f(0, mtxSrc.rows - 1);
+	src_corners[3]= cv::Point2f(mtxSrc.cols - 1, mtxSrc.rows - 1);
+ 
+	dst_corners[0] = cv::Point2f(iDstX1, iDstY1);
+	dst_corners[1] = cv::Point2f(iDstX2, iDstY2);
+	dst_corners[2] = cv::Point2f(iDstX3, iDstY3);
+	dst_corners[3] = cv::Point2f(iDstX4, iDstY4);
+ 
+	cv::Mat transMtx = cv::getPerspectiveTransform(src_corners, dst_corners);
+	cv::warpPerspective(mtxSrc, mtxDst, transMtx, cv::Size(iDstWidth, iDstHeight));
+ 
+	return mtxDst;
 }
 
 void handleFrame(TY_FRAME_DATA* frame, void* userdata ,void* tempdata)
@@ -274,29 +431,18 @@ void handleFrame(TY_FRAME_DATA* frame, void* userdata ,void* tempdata)
 
 	cv::Mat depth, irl, irr, color, point3D;
 	parseFrame(*frame, &depth, &irl, &irr, &color, &point3D);
-	// do Registration
-	cv::Mat newDepth;
-	if (!point3D.empty() && !color.empty()) 
-	{
-		// ASSERT_OK( TYRegisterWorldToColor2(pData->hDevice, (TY_VECT_3F*)point3D.data, 0
-		//             , point3D.cols * point3D.rows, color.cols, color.rows, (uint16_t*)buffer, sizeof(buffer)
-		//             ));
-		ASSERT_OK(TYRegisterWorldToColor(pData->hDevice, (TY_VECT_3F*)point3D.data, 0
-			, point3D.cols * point3D.rows, (uint16_t*)buffer, sizeof(buffer)
-			));
-		newDepth = cv::Mat(color.rows, color.cols, CV_16U, (uint16_t*)buffer);
-		cv::Mat resized_color;
-		cv::Mat temp;
-		//you may want to use median filter to fill holes in projected depth image or do something else here
-		cv::medianBlur(newDepth, temp, 5);
-		newDepth = temp;
-		//resize to the same size for display
-		cv::resize(newDepth, newDepth, depth.size(), 0, 0, 0);
-		/////lxl add///////
-		cv::Mat tempDepth = cv::Mat(depth.rows, depth.cols, CV_16U, tempdata);
+	cv::Mat newDepth,TransDepth,blackDepth;
+	cv::Mat resized_color;
+	cv::Mat temp;
+	
+	#if 1
+	if (!depth.empty()){
+				/////lxl add///////
+		cv::Mat tempDepth = cv::Mat(depth.rows, depth.cols, CV_16U, (uint16_t *)tempdata);
 		//for(int i =0 ; i < depth.rows*depth.cols ; i ++)
-		//	newDepth.data
-		newDepth = newDepth - tempDepth ;
+		//depth = depth - tempDepth ;	//深度图减去模板
+        cv::Mat Depth2 = cvMatRect2Tetra(depth, 18, 8, depth.cols - 1 + 7, 8, 46, depth.rows -1 - 7, depth.cols - 1 + 7, depth.rows - 1 - 7, depth.cols, depth.rows);
+		depthTransfer(Depth2, (uint16_t*)tempdata, &TransDepth, &blackDepth);
 		cv::resize(color, resized_color, depth.size());
 		cv::imshow("resizedColor", resized_color);
 		if (save_frame){
@@ -306,10 +452,10 @@ void handleFrame(TY_FRAME_DATA* frame, void* userdata ,void* tempdata)
 		}
 		//lxl add output grayimg
 		pData->render->SetColorType(DepthRender::COLORTYPE_GRAY);
-		cv::Mat depthColor = pData->render->Compute(newDepth);
+		cv::Mat depthColor = pData->render->Compute(TransDepth);
 		if (save_frame){
 			LOGD(">>>>>>>>>> write depthColor");
-			imwrite("depthColor.png", depthColor);
+			imwrite("TransdepthColor.png", depthColor);
 			//save_frame = false;
 		}
 		depthColor = depthColor / 2 + resized_color / 2;
@@ -322,11 +468,63 @@ void handleFrame(TY_FRAME_DATA* frame, void* userdata ,void* tempdata)
 		}
 		DeepImgFinds_write_rgb(depthColor,resized_color, 3, 7, 7);
 	}
+	// do Registration
+	#else
+	if (!point3D.empty() && !color.empty()) 
+	{
+		// ASSERT_OK( TYRegisterWorldToColor2(pData->hDevice, (TY_VECT_3F*)point3D.data, 0
+		//             , point3D.cols * point3D.rows, color.cols, color.rows, (uint16_t*)buffer, sizeof(buffer)
+		//             ));
+		ASSERT_OK(TYRegisterWorldToColor(pData->hDevice, (TY_VECT_3F*)point3D.data, 0
+			, point3D.cols * point3D.rows, (uint16_t*)buffer, sizeof(buffer)
+			));
+		newDepth = cv::Mat(color.rows, color.cols, CV_16U, (uint16_t*)buffer);
+		//you may want to use median filter to fill holes in projected depth image or do something else here
+		cv::medianBlur(newDepth, temp, 5);
+		newDepth = temp;
+		//resize to the same size for display
+		cv::resize(newDepth, newDepth, depth.size(), 0, 0, 0);
+		/////lxl add///////
+		//cv::Mat tempDepth = cv::Mat(depth.rows, depth.cols, CV_16U, tempdata);
+		//for(int i =0 ; i < depth.rows*depth.cols ; i ++)
+		//newDepth = newDepth - tempDepth ;	//深度图减去模板
+
+		depthTransfer(newDepth, (uint16_t*)tempdata, &TransDepth, &blackDepth);
+		cv::resize(color, resized_color, depth.size());
+		cv::imshow("resizedColor", resized_color);
+		if (save_frame){
+			LOGD(">>>>>>>>>> write resized_color");
+			imwrite("resized_color.png", resized_color);
+			//save_frame = false;
+		}
+		//lxl add output grayimg
+		pData->render->SetColorType(DepthRender::COLORTYPE_GRAY);
+		cv::Mat depthColor = pData->render->Compute(TransDepth);
+		if (save_frame){
+			LOGD(">>>>>>>>>> write depthColor");
+			imwrite("TransdepthColor.png", depthColor);
+			//save_frame = false;
+		}
+		depthColor = depthColor / 2 + resized_color / 2;
+		cv::imshow("projected depth", depthColor);
+		std::cout << "depthColor.channels:" << depthColor.channels() << "  rows:" << depthColor.rows << "  cols:" << depthColor.cols << std::endl;
+		if (save_frame){
+			LOGD(">>>>>>>>>> write projected_depth");
+			imwrite("projected_depth.png", depthColor);
+			//save_frame = false;
+		}
+		DeepImgFinds_write_rgb(depthColor,resized_color, 3, 7, 7);
+	}
+	#endif
 	if (save_frame){
 		LOGD(">>>>>>>>>> write images");
 		//imwrite("depth.png", newDepth);
 		imwrite("color.png", color);
 		save_frame = false;
+	}
+	if (save_rect_color) {
+		save_rect_color = false;
+		gsave_rect_count++;
 	}
 	//cv::namedWindow("key");
 	int key = cv::waitKey(1);
@@ -340,6 +538,9 @@ void handleFrame(TY_FRAME_DATA* frame, void* userdata ,void* tempdata)
 	case 's': case 1048576 + 's':
 		save_frame = true;
 		break;
+	case 'a': case 1048576 + 'a':
+		save_rect_color = true;
+		break; 
 	default:
 		LOGD("Pressed key %d", key);
 	}
